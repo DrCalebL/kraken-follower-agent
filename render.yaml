@@ -22,7 +22,5 @@ services:
         sync: false
       
       # Trading settings
-      - key: PORTFOLIO_SIZE
-        value: 10000
       - key: USE_TESTNET
         value: true
