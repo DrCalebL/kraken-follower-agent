@@ -1,0 +1,28 @@
+services:
+  - type: worker
+    name: nike-rocket-follower
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python kraken_follower_agent.py
+    
+    envVars:
+      # Nike Rocket API
+      - key: FOLLOWER_API_URL
+        value: https://nike-rocket-api-production.up.railway.app
+      
+      # User credentials (set by user during deploy)
+      - key: USER_API_KEY
+        sync: false
+      
+      # Kraken API credentials (set by user)
+      - key: KRAKEN_API_KEY
+        sync: false
+      - key: KRAKEN_API_SECRET
+        sync: false
+      
+      # Trading settings
+      - key: PORTFOLIO_SIZE
+        value: 10000
+      - key: USE_TESTNET
+        value: true
