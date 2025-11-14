@@ -45,7 +45,6 @@ FOLLOWER_API_URL: https://nike-rocket-api-production.up.railway.app
 USER_API_KEY: Your Nike Rocket API key (from signup)
 KRAKEN_API_KEY: Your Kraken API key
 KRAKEN_API_SECRET: Your Kraken API secret
-PORTFOLIO_SIZE: 10000 (your account size in USD)
 USE_TESTNET: true (for testing) or false (for live trading)
 ```
 
@@ -66,11 +65,8 @@ USE_TESTNET: true (for testing) or false (for live trading)
 - ✅ You can revoke access anytime
 
 **Kraken API permissions needed:**
-- ✅ Query Funds
-- ✅ Query Open Orders
-- ✅ Query Closed Orders
-- ✅ Create & Modify Orders
-- ❌ Withdraw Funds (DO NOT enable this!)
+- ✅ General API: **Full access**
+- ❌ Withdrawal API: **No access** (CRITICAL - never enable this!)
 
 ---
 
@@ -96,22 +92,27 @@ USE_TESTNET: true (for testing) or false (for live trading)
 2. Generates BUY/SELL signal
 3. Broadcasts to Nike Rocket API
 4. Your agent receives signal (within 10 seconds)
-5. Agent executes on YOUR Kraken account
-6. Position managed with automatic TP/SL
-7. Position closes when TP or SL hit
-8. Agent reports P&L for billing
+5. Agent fetches your REAL Kraken account balance
+6. Calculates position size (2% risk)
+7. Executes on YOUR Kraken account
+8. Position managed with automatic TP/SL
+9. Position closes when TP or SL hit
+10. Agent reports P&L for billing
 ```
 
 ---
 
 ## ⚙️ Settings
 
-### Portfolio Size
-Set this to your total Kraken Futures account balance. The agent uses 2% risk per trade.
+### Account Balance
+**Automatically fetched from Kraken!** The agent queries your real account balance before each trade, so position sizing is always 100% accurate.
 
-**Example:**
-- $10,000 account = $200 risk per trade
-- $5,000 account = $100 risk per trade
+**Multi-currency support:**
+- USD
+- USDT  
+- USDC
+
+Your positions scale automatically as your account grows!
 
 ### Testnet vs Live
 - **Testnet (true):** Practice with fake money on Kraken demo
