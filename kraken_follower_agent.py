@@ -36,7 +36,6 @@ KRAKEN_API_KEY = os.getenv("KRAKEN_API_KEY", "")
 KRAKEN_API_SECRET = os.getenv("KRAKEN_API_SECRET", "")
 
 # Trading settings
-PORTFOLIO_SIZE = float(os.getenv("PORTFOLIO_SIZE", "10000"))  # Your total account size in USD
 USE_TESTNET = os.getenv("USE_TESTNET", "true").lower() == "true"
 
 # Kraken API URLs
@@ -190,9 +189,9 @@ class NikeRocketFollower:
         print("🚀 NIKE ROCKET FOLLOWER AGENT")
         print("=" * 60)
         print(f"API URL: {FOLLOWER_API_URL}")
-        print(f"Portfolio Size: ${PORTFOLIO_SIZE:,.2f}")
-        print(f"Mode: {'TESTNET' if USE_TESTNET else 'LIVE'}")
+        print(f"Mode: {'TESTNET (Demo)' if USE_TESTNET else 'LIVE (Real Money)'}")
         print(f"Kraken API: {KRAKEN_API_URL}")
+        print("💰 Account balance will be fetched when signal arrives")
         print("=" * 60)
     
     async def verify_access(self) -> Dict:
@@ -240,6 +239,40 @@ class NikeRocketFollower:
                 print(f"❌ Error polling API: {e}")
                 return None
     
+    def get_current_equity(self) -> float:
+        """
+        Get current futures account equity from Kraken
+        Uses EXACT same method as master algorithm
+        Checks multiple currencies (USD, USDT, USDC) for Kraken multi-collateral
+        """
+        try:
+            balance = self.kraken.fetch_balance()
+            
+            # Try multiple currency options (Kraken multi-collateral)
+            for currency in ['USD', 'USDT', 'USDC']:
+                # Check total balance
+                if 'total' in balance and currency in balance['total']:
+                    equity = float(balance['total'][currency])
+                    if equity > 0:
+                        print(f"💰 Current equity: ${equity:,.2f} {currency}")
+                        return equity
+            
+            # Try free balance as fallback
+            for currency in ['USD', 'USDT', 'USDC']:
+                if 'free' in balance and currency in balance['free']:
+                    equity = float(balance['free'][currency])
+                    if equity > 0:
+                        print(f"💰 Current available: ${equity:,.2f} {currency}")
+                        return equity
+            
+            print("⚠️ No balance found in USD, USDT, or USDC")
+            print("💡 Make sure you have funds in your Kraken Futures wallet")
+            return 0.0
+                
+        except Exception as e:
+            print(f"❌ Error fetching balance: {e}")
+            return 0.0
+    
     async def execute_signal(self, signal: Dict):
         """Execute trading signal on Kraken"""
         try:
@@ -253,6 +286,15 @@ class NikeRocketFollower:
             print(f"Take Profit: ${signal['take_profit']}")
             print(f"Leverage: {signal['leverage']}x")
             print("=" * 60)
+            
+            # GET REAL-TIME ACCOUNT BALANCE (same as master algo!)
+            print("\n💰 Fetching account balance...")
+            current_equity = self.get_current_equity()
+            
+            if current_equity <= 0:
+                print("❌ No funds detected in account!")
+                print("💡 Please deposit funds to your Kraken Futures wallet")
+                return
             
             # CHECK IF WE ALREADY HAVE A POSITION FOR THIS SYMBOL
             print("\n🔍 Checking for existing positions...")
@@ -272,14 +314,15 @@ class NikeRocketFollower:
             
             print("✅ No existing position found, proceeding with execution")
             
-            # Store signal for P&L reporting later
+            # Store signal and equity for P&L reporting later
             self.entry_signal = signal
+            self.entry_equity = current_equity
             
             # Convert symbol (ADA/USDT → pf_adausd)
             kraken_symbol = self.convert_symbol(signal['symbol'])
             
-            # Calculate position size
-            risk_amount = PORTFOLIO_SIZE * 0.02  # 2% risk per trade
+            # Calculate position size using REAL account equity
+            risk_amount = current_equity * 0.02  # 2% risk per trade
             risk_per_unit = abs(signal['entry_price'] - signal['stop_loss'])
             position_size = risk_amount / risk_per_unit
             
@@ -287,7 +330,8 @@ class NikeRocketFollower:
             position_size_with_leverage = position_size * signal['leverage']
             
             print(f"\n🎯 POSITION SIZING:")
-            print(f"Risk Amount: ${risk_amount:.2f}")
+            print(f"Account Equity: ${current_equity:,.2f}")
+            print(f"Risk Amount (2%): ${risk_amount:.2f}")
             print(f"Risk Per Unit: ${risk_per_unit:.4f}")
             print(f"Base Position: {position_size:.2f}")
             print(f"With Leverage: {position_size_with_leverage:.2f}")
@@ -457,7 +501,6 @@ class NikeRocketFollower:
             return
         
         print("✅ Access verified")
-        print(f"Portfolio: ${PORTFOLIO_SIZE:,.2f}")
         print("\n📡 Polling for signals every 10 seconds...")
         print("Press Ctrl+C to stop\n")
         
