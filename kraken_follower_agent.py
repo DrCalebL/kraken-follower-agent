@@ -24,6 +24,8 @@ from datetime import datetime
 from typing import Optional, Dict
 import os
 import sys
+from threading import Thread
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ==================== CONFIGURATION ====================
 
@@ -46,6 +48,38 @@ else:
 
 # Polling interval
 POLL_INTERVAL = 10  # seconds
+
+# ==================== HEALTH CHECK SERVER FOR RENDER ====================
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Simple HTTP server for Render health checks"""
+    def do_GET(self):
+        if self.path == '/health' or self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            status = b'Nike Rocket Follower Agent - Running\n'
+            status += f'Mode: {"TESTNET" if USE_TESTNET else "LIVE"}\n'.encode()
+            status += f'Polling: Active\n'.encode()
+            self.wfile.write(status)
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        # Suppress HTTP server logs to keep output clean
+        pass
+
+
+def start_health_server():
+    """Start health check server in background thread"""
+    port = int(os.getenv("PORT", 10000))
+    try:
+        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+        print(f"🏥 Health check server started on port {port}")
+        server.serve_forever()
+    except Exception as e:
+        print(f"⚠️ Health server error: {e}")
 
 # ==================== KRAKEN API CLIENT ====================
 
@@ -550,4 +584,9 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Start health check server in background for Render
+    health_thread = Thread(target=start_health_server, daemon=True)
+    health_thread.start()
+    
+    # Run main polling loop
     asyncio.run(main())
