@@ -1,5 +1,5 @@
 services:
-  - type: worker
+  - type: web
     name: nike-rocket-follower
     env: python
     plan: free
