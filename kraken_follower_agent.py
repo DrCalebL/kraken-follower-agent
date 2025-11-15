@@ -139,7 +139,7 @@ class KrakenFuturesAPI:
     
     async def get_accounts(self) -> Dict:
         """Get account information"""
-        return await self._private_request("/derivatives/api/v3/accounts")
+        return await self._private_request("/api/v3/accounts")
     
     async def fetch_balance(self) -> Dict:
         """
@@ -147,8 +147,8 @@ class KrakenFuturesAPI:
         Fetches from Kraken Futures accounts endpoint and formats the response
         """
         try:
-            print("🔍 Calling Kraken API: /derivatives/api/v3/accounts")
-            accounts_data = await self._private_request("/derivatives/api/v3/accounts")
+            print("🔍 Calling Kraken API: /api/v3/accounts")
+            accounts_data = await self._private_request("/api/v3/accounts")
             
             print(f"📦 Kraken API Response: {accounts_data}")
             
@@ -253,20 +253,20 @@ class KrakenFuturesAPI:
         }
         
         return await self._private_request(
-            "/derivatives/api/v3/batchorder",
+            "/api/v3/batchorder",
             {"json": str(batch_order).replace("'", '"')}
         )
     
     async def get_open_positions(self) -> Dict:
         """Get all open positions"""
-        return await self._private_request("/derivatives/api/v3/openpositions")
+        return await self._private_request("/api/v3/openpositions")
     
     async def cancel_all_orders(self, symbol: str = None) -> Dict:
         """Cancel all orders (optionally for specific symbol)"""
         data = {}
         if symbol:
             data["symbol"] = symbol
-        return await self._private_request("/derivatives/api/v3/cancelallorders", data)
+        return await self._private_request("/api/v3/cancelallorders", data)
 
 
 # ==================== FOLLOWER AGENT ====================
