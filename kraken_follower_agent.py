@@ -1,8 +1,8 @@
 """
-Nike Rocket - Kraken Follower Agent (CCXT Version)
-===================================================
+Nike Rocket - Kraken Follower Agent (MAINNET/LIVE)
+====================================================
 
-Automated trading agent that:
+Automated trading agent for LIVE trading:
 1. Polls Nike Rocket API for signals
 2. Executes trades on Kraken Futures using CCXT
 3. Uses EXACT SAME methods as master algorithm
@@ -38,9 +38,8 @@ USER_API_KEY = os.getenv("USER_API_KEY", "")
 KRAKEN_API_KEY = os.getenv("KRAKEN_API_KEY", "")
 KRAKEN_API_SECRET = os.getenv("KRAKEN_API_SECRET", "")
 
-# Trading settings
-USE_TESTNET = os.getenv("USE_TESTNET", "true").lower() == "true"
-PYTHONUNBUFFERED = os.getenv("PYTHONUNBUFFERED", "1")
+# Trading settings - ALWAYS LIVE FOR THIS VERSION
+USE_TESTNET = False  # MAINNET ONLY!
 
 # Polling interval
 POLL_INTERVAL = 10  # seconds
@@ -57,7 +56,7 @@ class FlushStreamHandler(logging.StreamHandler):
         self.flush()
 
 logging.basicConfig(
-    level=logging.DEBUG,  # Changed to DEBUG for verbose output
+    level=logging.INFO,  # Use INFO for production
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[FlushStreamHandler(sys.stdout)]
 )
@@ -73,7 +72,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
             status = b'Nike Rocket Follower Agent - Running\n'
-            status += f'Mode: {"TESTNET" if USE_TESTNET else "LIVE"}\n'.encode()
+            status += f'Mode: LIVE (MAINNET)\n'.encode()
             status += f'Polling: Active\n'.encode()
             self.wfile.write(status)
         else:
@@ -95,12 +94,13 @@ def start_health_server():
         logger.error(f"⚠️ Health server error: {e}")
 
 
-# ==================== KRAKEN EXCHANGE (USING CCXT - SAME AS MASTER) ====================
+# ==================== KRAKEN EXCHANGE (PURE CCXT - MAINNET) ====================
 
 def initialize_kraken_exchange():
     """
     Initialize Kraken Futures using CCXT
-    EXACT SAME METHOD AS MASTER ALGORITHM
+    PURE CCXT - EXACT SAME METHOD AS MASTER ALGORITHM
+    MAINNET/LIVE ONLY
     """
     exchange_config = {
         'apiKey': KRAKEN_API_KEY,
@@ -111,23 +111,14 @@ def initialize_kraken_exchange():
         }
     }
     
-    if USE_TESTNET:
-        exchange_config['urls'] = {
-            'api': {
-                'public': 'https://demo-futures.kraken.com/derivatives',
-                'private': 'https://demo-futures.kraken.com/derivatives',
-            }
-        }
-        logger.info("🧪 Kraken DEMO mode enabled - using testnet")
-    else:
-        logger.info("🔴 Kraken LIVE mode enabled - REAL MONEY!")
+    logger.info("🔴 Kraken LIVE mode - REAL MONEY! 🔴")
     
     exchange = ccxt.krakenfutures(exchange_config)
     
     # Test connection
     try:
         exchange.load_markets()
-        logger.info(f"✅ Connected to Kraken Futures")
+        logger.info(f"✅ Connected to Kraken Futures (LIVE)")
     except Exception as e:
         logger.error(f"❌ Failed to connect to Kraken: {e}")
         raise
@@ -138,7 +129,7 @@ def initialize_kraken_exchange():
 # ==================== FOLLOWER AGENT ====================
 
 class NikeRocketFollower:
-    """Nike Rocket follower agent using CCXT (same as master algo)"""
+    """Nike Rocket follower agent using pure CCXT (mainnet)"""
     
     def __init__(self):
         self.exchange = initialize_kraken_exchange()
@@ -150,8 +141,8 @@ class NikeRocketFollower:
         print("🚀 NIKE ROCKET FOLLOWER AGENT", flush=True)
         print("=" * 60, flush=True)
         print(f"API URL: {FOLLOWER_API_URL}", flush=True)
-        print(f"Mode: {'TESTNET (Demo)' if USE_TESTNET else 'LIVE (Real Money)'}", flush=True)
-        print(f"Exchange: Kraken Futures (via CCXT)", flush=True)
+        print(f"Mode: 🔴 LIVE (REAL MONEY) 🔴", flush=True)
+        print(f"Exchange: Kraken Futures (MAINNET)", flush=True)
         
         # Check API key
         if USER_API_KEY:
@@ -184,11 +175,10 @@ class NikeRocketFollower:
         """Poll Nike Rocket API for new signals"""
         async with aiohttp.ClientSession() as session:
             try:
-                url = f"{FOLLOWER_API_URL}/api/latest-signal"  # Fixed URL!
+                url = f"{FOLLOWER_API_URL}/api/latest-signal"
                 headers = {"X-API-Key": USER_API_KEY}
                 
                 logger.debug(f"Polling: {url}")
-                logger.debug(f"API Key: {USER_API_KEY[:10]}..." if USER_API_KEY else "API Key: NOT SET")
                 
                 async with session.get(url, headers=headers) as response:
                     logger.debug(f"Response status: {response.status}")
@@ -213,26 +203,23 @@ class NikeRocketFollower:
                         logger.error("❌ Access forbidden - check API key permissions")
                     else:
                         logger.warning(f"⚠️ Unexpected status: {response.status}")
-                        response_text = await response.text()
-                        logger.warning(f"Response: {response_text}")
                     
                     return None
             except Exception as e:
                 logger.error(f"❌ Error polling API: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
                 return None
     
     def get_current_equity(self) -> float:
         """
         Get current futures account equity
-        EXACT SAME METHOD AS MASTER ALGORITHM
+        PURE CCXT - EXACT SAME METHOD AS MASTER ALGORITHM (MAINNET)
         """
         try:
             balance = self.exchange.fetch_balance()
             
             # Try multiple currency options (Kraken multi-collateral)
             for currency in ['USD', 'USDT', 'USDC']:
+                # Check total balance
                 if 'total' in balance and currency in balance['total']:
                     equity = float(balance['total'][currency])
                     if equity > 0:
@@ -248,10 +235,13 @@ class NikeRocketFollower:
                         return equity
             
             logger.warning("⚠️ No balance found in USD, USDT, or USDC")
+            logger.warning("💡 Make sure you have funds in your Kraken Futures wallet")
             return 0.0
                 
         except Exception as e:
             logger.error(f"❌ Error fetching balance: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return 0.0
     
     def convert_symbol(self, signal_symbol: str) -> str:
@@ -283,7 +273,7 @@ class NikeRocketFollower:
             print(f"Leverage: {signal['leverage']}x", flush=True)
             print("=" * 60, flush=True)
             
-            # GET REAL-TIME ACCOUNT BALANCE (same as master algo!)
+            # GET REAL-TIME ACCOUNT BALANCE
             print("\n💰 Fetching account balance...", flush=True)
             current_equity = self.get_current_equity()
             
@@ -319,7 +309,7 @@ class NikeRocketFollower:
             leverage = signal['leverage']
             
             # Calculate risk per unit
-            if signal['action'].upper() == 'BUY':
+            if action.upper() == 'BUY':
                 risk_per_unit = abs(entry_price - stop_loss)
             else:
                 risk_per_unit = abs(stop_loss - entry_price)
@@ -334,7 +324,7 @@ class NikeRocketFollower:
             
             print(f"\n🎯 POSITION SIZING:", flush=True)
             print(f"Account Equity: ${current_equity:,.2f}", flush=True)
-            print(f"Risk Amount (2%, flush=True): ${risk_amount:,.2f}", flush=True)
+            print(f"Risk Amount (2%): ${risk_amount:,.2f}", flush=True)
             print(f"Risk Per Unit: ${risk_per_unit:.4f}", flush=True)
             print(f"Base Position: {base_position_size:.2f}", flush=True)
             print(f"With Leverage: {quantity:.2f}", flush=True)
@@ -344,7 +334,7 @@ class NikeRocketFollower:
             
             # 1. Place entry order (market)
             print("📝 Placing entry order...", flush=True)
-            side = action.lower()  # 'buy' or 'sell' - from either 'action' or 'signal' field
+            side = action.lower()  # 'buy' or 'sell'
             entry_order = self.exchange.create_market_order(kraken_symbol, side, quantity)
             print(f"✅ Entry order placed: {entry_order['id']}", flush=True)
             
@@ -384,7 +374,7 @@ class NikeRocketFollower:
 
 async def main():
     """Main polling loop"""
-    print("🎯 Starting Nike Rocket Follower Agent...", flush=True)
+    print("🎯 Starting Nike Rocket Follower Agent (MAINNET)...", flush=True)
     
     follower = NikeRocketFollower()
     
