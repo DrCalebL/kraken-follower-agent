@@ -184,7 +184,7 @@ class NikeRocketFollower:
         """Poll Nike Rocket API for new signals"""
         async with aiohttp.ClientSession() as session:
             try:
-                url = f"{FOLLOWER_API_URL}/api/signals/latest"
+                url = f"{FOLLOWER_API_URL}/api/latest-signal"  # Fixed URL!
                 headers = {"X-API-Key": USER_API_KEY}
                 
                 logger.debug(f"Polling: {url}")
@@ -197,7 +197,12 @@ class NikeRocketFollower:
                         data = await response.json()
                         logger.debug(f"Response data: {data}")
                         
-                        if data.get('has_new_signal'):
+                        # Check if we have access and a signal
+                        if not data.get('access_granted'):
+                            logger.error(f"❌ Access denied: {data.get('reason')}")
+                            return None
+                        
+                        if data.get('signal'):
                             logger.info("🎯 NEW SIGNAL DETECTED!")
                             return data['signal']
                         else:
