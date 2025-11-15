@@ -102,7 +102,7 @@ class KrakenFuturesAPI:
         signature = hmac.new(secret_decoded, message_hash, hashlib.sha512)
         return base64.b64encode(signature.digest()).decode()
     
-    async def _private_request(self, endpoint: str, data: Dict = None) -> Dict:
+    async def _private_request(self, endpoint: str, data: Dict = None, method: str = "POST") -> Dict:
         """Make authenticated API request"""
         if data is None:
             data = {}
@@ -116,30 +116,36 @@ class KrakenFuturesAPI:
         headers = {
             "APIKey": self.api_key,
             "Authent": signature,
-            "Content-Type": "application/x-www-form-urlencoded"
         }
         
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.base_url}{endpoint}",
-                headers=headers,
-                data=postdata
-            ) as response:
-                result = await response.json()
-                
-                print(f"🔍 Kraken API Response Status: {response.status}")
-                print(f"🔍 Kraken API Response Body: {result}")
-                
-                if result.get("result") == "success":
-                    return result
-                else:
-                    error_msg = result.get('error', result.get('errors', 'Unknown error'))
-                    print(f"❌ Kraken API returned error: {error_msg}")
-                    raise Exception(f"Kraken API error: {error_msg}")
+            url = f"{self.base_url}{endpoint}"
+            
+            if method.upper() == "GET":
+                # For GET requests, add params to URL
+                if postdata:
+                    url = f"{url}?{postdata}"
+                async with session.get(url, headers=headers) as response:
+                    result = await response.json()
+            else:
+                # For POST requests, send as form data
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
+                async with session.post(url, headers=headers, data=postdata) as response:
+                    result = await response.json()
+            
+            print(f"🔍 Kraken API Response Status: {response.status}")
+            print(f"🔍 Kraken API Response Body: {result}")
+            
+            if result.get("result") == "success":
+                return result
+            else:
+                error_msg = result.get('error', result.get('errors', 'Unknown error'))
+                print(f"❌ Kraken API returned error: {error_msg}")
+                raise Exception(f"Kraken API error: {error_msg}")
     
     async def get_accounts(self) -> Dict:
         """Get account information"""
-        return await self._private_request("/api/v3/accounts")
+        return await self._private_request("/api/v3/accounts", method="GET")
     
     async def fetch_balance(self) -> Dict:
         """
@@ -148,7 +154,7 @@ class KrakenFuturesAPI:
         """
         try:
             print("🔍 Calling Kraken API: /api/v3/accounts")
-            accounts_data = await self._private_request("/api/v3/accounts")
+            accounts_data = await self._private_request("/api/v3/accounts", method="GET")
             
             print(f"📦 Kraken API Response: {accounts_data}")
             
@@ -259,7 +265,7 @@ class KrakenFuturesAPI:
     
     async def get_open_positions(self) -> Dict:
         """Get all open positions"""
-        return await self._private_request("/api/v3/openpositions")
+        return await self._private_request("/api/v3/openpositions", method="GET")
     
     async def cancel_all_orders(self, symbol: str = None) -> Dict:
         """Cancel all orders (optionally for specific symbol)"""
