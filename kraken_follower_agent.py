@@ -136,6 +136,56 @@ class KrakenFuturesAPI:
         """Get account information"""
         return await self._private_request("/derivatives/api/v3/accounts")
     
+    async def fetch_balance(self) -> Dict:
+        """
+        Get account balance in CCXT-compatible format
+        Fetches from Kraken Futures accounts endpoint and formats the response
+        """
+        try:
+            accounts_data = await self._private_request("/derivatives/api/v3/accounts")
+            
+            # Kraken returns: {"result": "success", "accounts": {...}}
+            if accounts_data.get("result") == "success" and "accounts" in accounts_data:
+                accounts = accounts_data["accounts"]
+                
+                # Format as CCXT-style balance
+                balance = {
+                    'total': {},
+                    'free': {},
+                    'used': {}
+                }
+                
+                # Kraken Futures flex account shows balances
+                if "flex" in accounts:
+                    flex = accounts["flex"]
+                    
+                    # Get available currencies
+                    if "currencies" in flex:
+                        for currency, data in flex["currencies"].items():
+                            currency_upper = currency.upper()
+                            
+                            # Total balance (including positions)
+                            if "quantity" in data:
+                                balance['total'][currency_upper] = float(data["quantity"])
+                            
+                            # Available balance (not in use)
+                            if "available" in data:
+                                balance['free'][currency_upper] = float(data["available"])
+                
+                # Also check if there's a balance key directly
+                if "balanceValue" in accounts.get("flex", {}):
+                    balance_value = float(accounts["flex"]["balanceValue"])
+                    balance['total']['USD'] = balance_value
+                    balance['free']['USD'] = balance_value
+                
+                return balance
+            
+            return {'total': {}, 'free': {}, 'used': {}}
+            
+        except Exception as e:
+            print(f"❌ Error fetching balance from Kraken: {e}")
+            return {'total': {}, 'free': {}, 'used': {}}
+    
     async def send_bracket_order(
         self,
         symbol: str,
@@ -273,14 +323,14 @@ class NikeRocketFollower:
                 print(f"❌ Error polling API: {e}")
                 return None
     
-    def get_current_equity(self) -> float:
+    async def get_current_equity(self) -> float:
         """
         Get current futures account equity from Kraken
         Uses EXACT same method as master algorithm
         Checks multiple currencies (USD, USDT, USDC) for Kraken multi-collateral
         """
         try:
-            balance = self.kraken.fetch_balance()
+            balance = await self.kraken.fetch_balance()
             
             # Try multiple currency options (Kraken multi-collateral)
             for currency in ['USD', 'USDT', 'USDC']:
@@ -323,7 +373,7 @@ class NikeRocketFollower:
             
             # GET REAL-TIME ACCOUNT BALANCE (same as master algo!)
             print("\n💰 Fetching account balance...")
-            current_equity = self.get_current_equity()
+            current_equity = await self.get_current_equity()
             
             if current_equity <= 0:
                 print("❌ No funds detected in account!")
