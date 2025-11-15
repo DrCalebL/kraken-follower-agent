@@ -108,21 +108,33 @@ class KrakenFuturesAPI:
             data = {}
         
         nonce = str(int(time.time() * 1000))
-        data["nonce"] = nonce
         
-        postdata = urllib.parse.urlencode(data)
+        # For GET requests, don't include nonce in data (it goes in header)
+        # For POST requests, include nonce in data
+        if method.upper() == "GET":
+            # Empty postdata for GET
+            postdata = ""
+            if data:
+                # If there are other params, encode them
+                postdata = urllib.parse.urlencode(data)
+        else:
+            # For POST, include nonce in data
+            data["nonce"] = nonce
+            postdata = urllib.parse.urlencode(data)
+        
         signature = self._generate_signature(endpoint, postdata, nonce)
         
         headers = {
             "APIKey": self.api_key,
             "Authent": signature,
+            "Nonce": nonce,  # Always include Nonce header
         }
         
         async with aiohttp.ClientSession() as session:
             url = f"{self.base_url}{endpoint}"
             
             if method.upper() == "GET":
-                # For GET requests, add params to URL
+                # For GET requests, add params to URL if any
                 if postdata:
                     url = f"{url}?{postdata}"
                 async with session.get(url, headers=headers) as response:
