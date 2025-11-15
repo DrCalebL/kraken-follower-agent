@@ -11,17 +11,22 @@ Automated trading agent that:
 Author: Nike Rocket Team
 """
 
+# CRITICAL: Force unbuffered output for real-time logs on Render/Railway
+import os
+import sys
+os.environ['PYTHONUNBUFFERED'] = '1'
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 import asyncio
 import aiohttp
 import time
 import ccxt
-import os
-import sys
-import logging
 from datetime import datetime
 from typing import Optional, Dict
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import logging
 
 # ==================== CONFIGURATION ====================
 
@@ -42,10 +47,19 @@ POLL_INTERVAL = 10  # seconds
 
 # ==================== LOGGING ====================
 
+# Configure logging with immediate flush
+import logging.handlers
+
+class FlushStreamHandler(logging.StreamHandler):
+    """StreamHandler that flushes after every emit"""
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed to DEBUG for verbose output
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    handlers=[FlushStreamHandler(sys.stdout)]
 )
 logger = logging.getLogger('FOLLOWER')
 
@@ -132,14 +146,22 @@ class NikeRocketFollower:
         self.current_position = None
         self.entry_signal = None
         
-        print("=" * 60)
-        print("🚀 NIKE ROCKET FOLLOWER AGENT")
-        print("=" * 60)
-        print(f"API URL: {FOLLOWER_API_URL}")
-        print(f"Mode: {'TESTNET (Demo)' if USE_TESTNET else 'LIVE (Real Money)'}")
-        print(f"Exchange: Kraken Futures (via CCXT)")
-        print("💰 Account balance will be fetched when signal arrives")
-        print("=" * 60)
+        print("=" * 60, flush=True)
+        print("🚀 NIKE ROCKET FOLLOWER AGENT", flush=True)
+        print("=" * 60, flush=True)
+        print(f"API URL: {FOLLOWER_API_URL}", flush=True)
+        print(f"Mode: {'TESTNET (Demo)' if USE_TESTNET else 'LIVE (Real Money)'}", flush=True)
+        print(f"Exchange: Kraken Futures (via CCXT)", flush=True)
+        
+        # Check API key
+        if USER_API_KEY:
+            print(f"🔑 User API Key: {USER_API_KEY[:10]}...{USER_API_KEY[-4:]}", flush=True)
+        else:
+            print("⚠️  WARNING: USER_API_KEY not set!", flush=True)
+            print("⚠️  Set USER_API_KEY environment variable", flush=True)
+        
+        print("💰 Account balance will be fetched when signal arrives", flush=True)
+        print("=" * 60, flush=True)
     
     async def verify_access(self) -> Dict:
         """Verify access with Nike Rocket API"""
@@ -162,17 +184,38 @@ class NikeRocketFollower:
         """Poll Nike Rocket API for new signals"""
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(
-                    f"{FOLLOWER_API_URL}/api/signals/latest",
-                    headers={"X-API-Key": USER_API_KEY}
-                ) as response:
+                url = f"{FOLLOWER_API_URL}/api/signals/latest"
+                headers = {"X-API-Key": USER_API_KEY}
+                
+                logger.debug(f"Polling: {url}")
+                logger.debug(f"API Key: {USER_API_KEY[:10]}..." if USER_API_KEY else "API Key: NOT SET")
+                
+                async with session.get(url, headers=headers) as response:
+                    logger.debug(f"Response status: {response.status}")
+                    
                     if response.status == 200:
                         data = await response.json()
+                        logger.debug(f"Response data: {data}")
+                        
                         if data.get('has_new_signal'):
+                            logger.info("🎯 NEW SIGNAL DETECTED!")
                             return data['signal']
+                        else:
+                            logger.debug("No new signal")
+                    elif response.status == 401:
+                        logger.error("❌ Authentication failed - check USER_API_KEY")
+                    elif response.status == 403:
+                        logger.error("❌ Access forbidden - check API key permissions")
+                    else:
+                        logger.warning(f"⚠️ Unexpected status: {response.status}")
+                        response_text = await response.text()
+                        logger.warning(f"Response: {response_text}")
+                    
                     return None
             except Exception as e:
                 logger.error(f"❌ Error polling API: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return None
     
     def get_current_equity(self) -> float:
@@ -221,45 +264,48 @@ class NikeRocketFollower:
     async def execute_signal(self, signal: Dict):
         """Execute trading signal on Kraken using CCXT"""
         try:
-            print("\n" + "=" * 60)
-            print("📡 NEW SIGNAL RECEIVED")
-            print("=" * 60)
-            print(f"Action: {signal['action']}")
-            print(f"Symbol: {signal['symbol']}")
-            print(f"Entry: ${signal['entry_price']}")
-            print(f"Stop Loss: ${signal['stop_loss']}")
-            print(f"Take Profit: ${signal['take_profit']}")
-            print(f"Leverage: {signal['leverage']}x")
-            print("=" * 60)
+            # Handle both 'action' (from API/curl) and 'signal' (from master algo)
+            action = signal.get('action') or signal.get('signal')
+            
+            print("\n" + "=" * 60, flush=True)
+            print("📡 NEW SIGNAL RECEIVED", flush=True)
+            print("=" * 60, flush=True)
+            print(f"Action: {action}", flush=True)
+            print(f"Symbol: {signal['symbol']}", flush=True)
+            print(f"Entry: ${signal['entry_price']}", flush=True)
+            print(f"Stop Loss: ${signal['stop_loss']}", flush=True)
+            print(f"Take Profit: ${signal['take_profit']}", flush=True)
+            print(f"Leverage: {signal['leverage']}x", flush=True)
+            print("=" * 60, flush=True)
             
             # GET REAL-TIME ACCOUNT BALANCE (same as master algo!)
-            print("\n💰 Fetching account balance...")
+            print("\n💰 Fetching account balance...", flush=True)
             current_equity = self.get_current_equity()
             
             if current_equity <= 0:
-                print("❌ No funds detected in account!")
+                print("❌ No funds detected in account!", flush=True)
                 return
             
             # Convert symbol to Kraken format
             kraken_symbol = self.convert_symbol(signal['symbol'])
-            print(f"🔄 Converted symbol: {signal['symbol']} → {kraken_symbol}")
+            print(f"🔄 Converted symbol: {signal['symbol']} → {kraken_symbol}", flush=True)
             
             # CHECK IF WE ALREADY HAVE A POSITION
-            print("\n🔍 Checking for existing positions...")
+            print("\n🔍 Checking for existing positions...", flush=True)
             positions = self.exchange.fetch_positions([kraken_symbol])
             
             has_position = False
             for pos in positions:
                 if pos['symbol'] == kraken_symbol and float(pos.get('contracts', 0)) > 0:
                     has_position = True
-                    print(f"⚠️ Existing position found: {pos['contracts']} contracts")
+                    print(f"⚠️ Existing position found: {pos['contracts']} contracts", flush=True)
                     break
             
             if has_position:
-                print("⚠️ Already have a position, skipping signal")
+                print("⚠️ Already have a position, skipping signal", flush=True)
                 return
             
-            print("✅ No existing position found, proceeding with execution")
+            print("✅ No existing position found, proceeding with execution", flush=True)
             
             # CALCULATE POSITION SIZE
             risk_percentage = 0.02  # 2% risk per trade
@@ -281,47 +327,47 @@ class NikeRocketFollower:
             # Round to exchange precision
             quantity = float(self.exchange.amount_to_precision(kraken_symbol, leveraged_position_size))
             
-            print(f"\n🎯 POSITION SIZING:")
-            print(f"Account Equity: ${current_equity:,.2f}")
-            print(f"Risk Amount (2%): ${risk_amount:,.2f}")
-            print(f"Risk Per Unit: ${risk_per_unit:.4f}")
-            print(f"Base Position: {base_position_size:.2f}")
-            print(f"With Leverage: {quantity:.2f}")
+            print(f"\n🎯 POSITION SIZING:", flush=True)
+            print(f"Account Equity: ${current_equity:,.2f}", flush=True)
+            print(f"Risk Amount (2%, flush=True): ${risk_amount:,.2f}", flush=True)
+            print(f"Risk Per Unit: ${risk_per_unit:.4f}", flush=True)
+            print(f"Base Position: {base_position_size:.2f}", flush=True)
+            print(f"With Leverage: {quantity:.2f}", flush=True)
             
             # PLACE ORDERS SEQUENTIALLY (SAME AS MASTER ALGO)
-            print(f"\n🚀 EXECUTING 3-ORDER BRACKET...")
+            print(f"\n🚀 EXECUTING 3-ORDER BRACKET...", flush=True)
             
             # 1. Place entry order (market)
-            print("📝 Placing entry order...")
-            side = signal['action'].lower()  # 'buy' or 'sell'
+            print("📝 Placing entry order...", flush=True)
+            side = action.lower()  # 'buy' or 'sell' - from either 'action' or 'signal' field
             entry_order = self.exchange.create_market_order(kraken_symbol, side, quantity)
-            print(f"✅ Entry order placed: {entry_order['id']}")
+            print(f"✅ Entry order placed: {entry_order['id']}", flush=True)
             
             # 2. Wait a moment for fill
             await asyncio.sleep(2)
             
             # 3. Place take-profit order
-            print("📝 Placing take-profit order...")
+            print("📝 Placing take-profit order...", flush=True)
             exit_side = 'sell' if side == 'buy' else 'buy'
             tp_price = float(self.exchange.price_to_precision(kraken_symbol, signal['take_profit']))
             tp_order = self.exchange.create_limit_order(
                 kraken_symbol, exit_side, quantity, tp_price,
                 params={'reduceOnly': True}
             )
-            print(f"✅ Take-profit order placed: {tp_order['id']}")
+            print(f"✅ Take-profit order placed: {tp_order['id']}", flush=True)
             
             # 4. Place stop-loss order
-            print("📝 Placing stop-loss order...")
+            print("📝 Placing stop-loss order...", flush=True)
             sl_price = float(self.exchange.price_to_precision(kraken_symbol, signal['stop_loss']))
             sl_order = self.exchange.create_order(
                 kraken_symbol, 'stop', exit_side, quantity,
                 params={'stopPrice': sl_price, 'reduceOnly': True}
             )
-            print(f"✅ Stop-loss order placed: {sl_order['id']}")
+            print(f"✅ Stop-loss order placed: {sl_order['id']}", flush=True)
             
-            print(f"\n🎉 TRADE EXECUTED SUCCESSFULLY!")
-            print(f"Position opened with full TP/SL protection")
-            print("=" * 60)
+            print(f"\n🎉 TRADE EXECUTED SUCCESSFULLY!", flush=True)
+            print(f"Position opened with full TP/SL protection", flush=True)
+            print("=" * 60, flush=True)
             
         except Exception as e:
             logger.error(f"❌ Error executing signal: {e}")
@@ -333,39 +379,47 @@ class NikeRocketFollower:
 
 async def main():
     """Main polling loop"""
-    print("🎯 Starting Nike Rocket Follower Agent...")
+    print("🎯 Starting Nike Rocket Follower Agent...", flush=True)
     
     follower = NikeRocketFollower()
     
     # Verify access
     access_result = await follower.verify_access()
     if not access_result.get('access_granted'):
-        print("❌ Access denied! Check your API key")
+        print("❌ Access denied! Check your API key", flush=True)
         return
     
-    print("✅ Access verified")
-    print(f"📡 Polling for signals every {POLL_INTERVAL} seconds...")
-    print("Press Ctrl+C to stop\n")
+    print("✅ Access verified", flush=True)
+    print(f"📡 Polling for signals every {POLL_INTERVAL} seconds...", flush=True)
+    print("Press Ctrl+C to stop\n", flush=True)
     
+    poll_count = 0
     while True:
         try:
+            poll_count += 1
+            logger.info(f"📡 Poll #{poll_count} - Checking for signals...")
+            
             # Poll for new signal
             signal = await follower.poll_for_signal()
             
             if signal:
+                logger.info(f"✨ Signal detected on poll #{poll_count}!")
                 # Execute the signal
                 await follower.execute_signal(signal)
             else:
-                print(f"⏳ No new signals (polling...)", end='\r')
+                logger.info(f"✓ Poll #{poll_count} complete - No new signals")
             
             # Wait before next poll
+            logger.debug(f"⏳ Waiting {POLL_INTERVAL} seconds until next poll...")
             await asyncio.sleep(POLL_INTERVAL)
             
         except KeyboardInterrupt:
-            print("\n⛔ Stopping follower agent...")
+            print("\n⛔ Stopping follower agent...", flush=True)
             break
         except Exception as e:
             logger.error(f"❌ Error in main loop: {e}")
+            import traceback
+            traceback.print_exc()
             await asyncio.sleep(POLL_INTERVAL)
 
 
