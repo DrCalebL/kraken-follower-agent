@@ -259,44 +259,43 @@ class KrakenFuturesAPI:
             stop_loss: Stop loss price
             take_profit: Take profit price
         """
-        # Prepare order batch
-        batch_order = {
-            "batchorder": [
-                {
-                    "order": "send",
-                    "order_type": "lmt" if entry_price else "mkt",
-                    "symbol": symbol,
-                    "side": side,
-                    "size": quantity,
-                    "limitPrice": entry_price,
-                    "cliOrdId": f"nike_entry_{int(time.time())}"
-                },
-                {
-                    "order": "send",
-                    "order_type": "stp",
-                    "symbol": symbol,
-                    "side": "sell" if side == "buy" else "buy",
-                    "size": quantity,
-                    "stopPrice": stop_loss,
-                    "triggerSignal": "mark",
-                    "cliOrdId": f"nike_sl_{int(time.time())}"
-                },
-                {
-                    "order": "send",
-                    "order_type": "take_profit",
-                    "symbol": symbol,
-                    "side": "sell" if side == "buy" else "buy",
-                    "size": quantity,
-                    "limitPrice": take_profit,
-                    "triggerSignal": "mark",
-                    "cliOrdId": f"nike_tp_{int(time.time())}"
-                }
-            ]
-        }
+        # Prepare order batch - use correct Kraken field names
+        batch_order_list = [
+            {
+                "order": "send",
+                "orderType": "lmt" if entry_price else "mkt",
+                "symbol": symbol,
+                "side": side,
+                "size": quantity,
+                "limitPrice": entry_price,
+                "cliOrdId": f"nike_entry_{int(time.time())}"
+            },
+            {
+                "order": "send",
+                "orderType": "stp",
+                "symbol": symbol,
+                "side": "sell" if side == "buy" else "buy",
+                "size": quantity,
+                "stopPrice": stop_loss,
+                "triggerSignal": "mark",
+                "cliOrdId": f"nike_sl_{int(time.time())}"
+            },
+            {
+                "order": "send",
+                "orderType": "take_profit",
+                "symbol": symbol,
+                "side": "sell" if side == "buy" else "buy",
+                "size": quantity,
+                "limitPrice": take_profit,
+                "triggerSignal": "mark",
+                "cliOrdId": f"nike_tp_{int(time.time())}"
+            }
+        ]
         
+        import json
         return await self._private_request(
             "/derivatives/api/v3/batchorder",
-            {"json": str(batch_order).replace("'", '"')}
+            {"batchorder": json.dumps(batch_order_list)}
         )
     
     async def get_open_positions(self) -> Dict:
