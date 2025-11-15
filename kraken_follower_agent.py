@@ -127,10 +127,15 @@ class KrakenFuturesAPI:
             ) as response:
                 result = await response.json()
                 
+                print(f"🔍 Kraken API Response Status: {response.status}")
+                print(f"🔍 Kraken API Response Body: {result}")
+                
                 if result.get("result") == "success":
                     return result
                 else:
-                    raise Exception(f"Kraken API error: {result.get('error', 'Unknown error')}")
+                    error_msg = result.get('error', result.get('errors', 'Unknown error'))
+                    print(f"❌ Kraken API returned error: {error_msg}")
+                    raise Exception(f"Kraken API error: {error_msg}")
     
     async def get_accounts(self) -> Dict:
         """Get account information"""
@@ -142,7 +147,10 @@ class KrakenFuturesAPI:
         Fetches from Kraken Futures accounts endpoint and formats the response
         """
         try:
+            print("🔍 Calling Kraken API: /derivatives/api/v3/accounts")
             accounts_data = await self._private_request("/derivatives/api/v3/accounts")
+            
+            print(f"📦 Kraken API Response: {accounts_data}")
             
             # Kraken returns: {"result": "success", "accounts": {...}}
             if accounts_data.get("result") == "success" and "accounts" in accounts_data:
@@ -184,6 +192,9 @@ class KrakenFuturesAPI:
             
         except Exception as e:
             print(f"❌ Error fetching balance from Kraken: {e}")
+            print(f"🔍 Exception type: {type(e).__name__}")
+            import traceback
+            print(f"🔍 Traceback: {traceback.format_exc()}")
             return {'total': {}, 'free': {}, 'used': {}}
     
     async def send_bracket_order(
