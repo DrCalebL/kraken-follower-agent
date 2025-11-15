@@ -126,15 +126,39 @@ class KrakenFuturesAPI:
                 if postdata:
                     url = f"{url}?{postdata}"
                 async with session.get(url, headers=headers) as response:
-                    result = await response.json()
+                    # Check content type before parsing
+                    content_type = response.headers.get('Content-Type', '')
+                    response_text = await response.text()
+                    
+                    print(f"🔍 Kraken API Response Status: {response.status}")
+                    print(f"🔍 Kraken API Content-Type: {content_type}")
+                    print(f"🔍 Kraken API Response (first 500 chars): {response_text[:500]}")
+                    
+                    if 'application/json' in content_type:
+                        result = await response.json()
+                    else:
+                        print(f"❌ Kraken returned HTML instead of JSON!")
+                        print(f"Full response: {response_text}")
+                        raise Exception(f"Kraken API returned HTML instead of JSON. Response: {response_text[:200]}")
             else:
                 # For POST requests, send as form data
                 headers["Content-Type"] = "application/x-www-form-urlencoded"
                 async with session.post(url, headers=headers, data=postdata) as response:
-                    result = await response.json()
+                    content_type = response.headers.get('Content-Type', '')
+                    response_text = await response.text()
+                    
+                    print(f"🔍 Kraken API Response Status: {response.status}")
+                    print(f"🔍 Kraken API Content-Type: {content_type}")
+                    print(f"🔍 Kraken API Response (first 500 chars): {response_text[:500]}")
+                    
+                    if 'application/json' in content_type:
+                        result = await response.json()
+                    else:
+                        print(f"❌ Kraken returned HTML instead of JSON!")
+                        print(f"Full response: {response_text}")
+                        raise Exception(f"Kraken API returned HTML instead of JSON. Response: {response_text[:200]}")
             
-            print(f"🔍 Kraken API Response Status: {response.status}")
-            print(f"🔍 Kraken API Response Body: {result}")
+            print(f"🔍 Parsed JSON result: {result}")
             
             if result.get("result") == "success":
                 return result
