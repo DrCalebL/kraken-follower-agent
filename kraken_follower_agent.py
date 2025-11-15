@@ -1,14 +1,12 @@
 """
-Nike Rocket - Kraken Follower Agent
-====================================
+Nike Rocket - Kraken Follower Agent (CCXT Version)
+===================================================
 
 Automated trading agent that:
 1. Polls Nike Rocket API for signals
-2. Executes trades on Kraken Futures
-3. Manages positions with TP/SL
-4. Reports P&L back to API
-
-Users deploy this on Render with their own Kraken API keys.
+2. Executes trades on Kraken Futures using CCXT
+3. Uses EXACT SAME methods as master algorithm
+4. Manages positions with TP/SL
 
 Author: Nike Rocket Team
 """
@@ -16,21 +14,19 @@ Author: Nike Rocket Team
 import asyncio
 import aiohttp
 import time
-import hmac
-import hashlib
-import base64
-import urllib.parse
-from datetime import datetime
-from typing import Optional, Dict
+import ccxt
 import os
 import sys
+import logging
+from datetime import datetime
+from typing import Optional, Dict
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ==================== CONFIGURATION ====================
 
 # Nike Rocket API
-FOLLOWER_API_URL = os.getenv("FOLLOWER_API_URL", "https://your-railway-app.up.railway.app")
+FOLLOWER_API_URL = os.getenv("FOLLOWER_API_URL", "https://nike-rocket-api-production.up.railway.app")
 USER_API_KEY = os.getenv("USER_API_KEY", "")
 
 # Kraken API credentials
@@ -39,15 +35,19 @@ KRAKEN_API_SECRET = os.getenv("KRAKEN_API_SECRET", "")
 
 # Trading settings
 USE_TESTNET = os.getenv("USE_TESTNET", "true").lower() == "true"
-
-# Kraken API URLs
-if USE_TESTNET:
-    KRAKEN_API_URL = "https://demo-futures.kraken.com"
-else:
-    KRAKEN_API_URL = "https://futures.kraken.com"
+PYTHONUNBUFFERED = os.getenv("PYTHONUNBUFFERED", "1")
 
 # Polling interval
 POLL_INTERVAL = 10  # seconds
+
+# ==================== LOGGING ====================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger('FOLLOWER')
 
 # ==================== HEALTH CHECK SERVER FOR RENDER ====================
 
@@ -67,8 +67,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
             self.end_headers()
     
     def log_message(self, format, *args):
-        # Suppress HTTP server logs to keep output clean
-        pass
+        pass  # Suppress HTTP logs
 
 
 def start_health_server():
@@ -76,247 +75,59 @@ def start_health_server():
     port = int(os.getenv("PORT", 10000))
     try:
         server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-        print(f"🏥 Health check server started on port {port}")
+        logger.info(f"🏥 Health check server started on port {port}")
         server.serve_forever()
     except Exception as e:
-        print(f"⚠️ Health server error: {e}")
+        logger.error(f"⚠️ Health server error: {e}")
 
-# ==================== KRAKEN API CLIENT ====================
 
-class KrakenFuturesAPI:
-    """Kraken Futures API client"""
-    
-    def __init__(self, api_key: str, api_secret: str, testnet: bool = False):
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.base_url = "https://demo-futures.kraken.com" if testnet else "https://futures.kraken.com"
-    
-    def _generate_signature(self, endpoint: str, postdata: str, nonce: str) -> str:
-        """Generate authentication signature"""
-        if endpoint.startswith("/derivatives"):
-            endpoint = endpoint[len("/derivatives"):]
-        
-        message = postdata + nonce + endpoint
-        message_hash = hashlib.sha256(message.encode()).digest()
-        secret_decoded = base64.b64decode(self.api_secret)
-        signature = hmac.new(secret_decoded, message_hash, hashlib.sha512)
-        return base64.b64encode(signature.digest()).decode()
-    
-    async def _private_request(self, endpoint: str, data: Dict = None, method: str = "POST") -> Dict:
-        """Make authenticated API request"""
-        if data is None:
-            data = {}
-        
-        nonce = str(int(time.time() * 1000))
-        
-        # For GET requests, don't include nonce in data (it goes in header)
-        # For POST requests, include nonce in data
-        if method.upper() == "GET":
-            # Empty postdata for GET
-            postdata = ""
-            if data:
-                # If there are other params, encode them
-                postdata = urllib.parse.urlencode(data)
-        else:
-            # For POST, include nonce in data
-            data["nonce"] = nonce
-            postdata = urllib.parse.urlencode(data)
-        
-        signature = self._generate_signature(endpoint, postdata, nonce)
-        
-        headers = {
-            "APIKey": self.api_key,
-            "Authent": signature,
-            "Nonce": nonce,  # Always include Nonce header
+# ==================== KRAKEN EXCHANGE (USING CCXT - SAME AS MASTER) ====================
+
+def initialize_kraken_exchange():
+    """
+    Initialize Kraken Futures using CCXT
+    EXACT SAME METHOD AS MASTER ALGORITHM
+    """
+    exchange_config = {
+        'apiKey': KRAKEN_API_KEY,
+        'secret': KRAKEN_API_SECRET,
+        'enableRateLimit': True,
+        'options': {
+            'defaultType': 'future',
         }
-        
-        async with aiohttp.ClientSession() as session:
-            url = f"{self.base_url}{endpoint}"
-            
-            if method.upper() == "GET":
-                # For GET requests, add params to URL if any
-                if postdata:
-                    url = f"{url}?{postdata}"
-                async with session.get(url, headers=headers) as response:
-                    # Check content type before parsing
-                    content_type = response.headers.get('Content-Type', '')
-                    response_text = await response.text()
-                    
-                    print(f"🔍 Kraken API Response Status: {response.status}")
-                    print(f"🔍 Kraken API Content-Type: {content_type}")
-                    print(f"🔍 Kraken API Response (first 500 chars): {response_text[:500]}")
-                    
-                    if 'application/json' in content_type:
-                        result = await response.json()
-                    else:
-                        print(f"❌ Kraken returned HTML instead of JSON!")
-                        print(f"Full response: {response_text}")
-                        raise Exception(f"Kraken API returned HTML instead of JSON. Response: {response_text[:200]}")
-            else:
-                # For POST requests, send as form data
-                headers["Content-Type"] = "application/x-www-form-urlencoded"
-                async with session.post(url, headers=headers, data=postdata) as response:
-                    content_type = response.headers.get('Content-Type', '')
-                    response_text = await response.text()
-                    
-                    print(f"🔍 Kraken API Response Status: {response.status}")
-                    print(f"🔍 Kraken API Content-Type: {content_type}")
-                    print(f"🔍 Kraken API Response (first 500 chars): {response_text[:500]}")
-                    
-                    if 'application/json' in content_type:
-                        result = await response.json()
-                    else:
-                        print(f"❌ Kraken returned HTML instead of JSON!")
-                        print(f"Full response: {response_text}")
-                        raise Exception(f"Kraken API returned HTML instead of JSON. Response: {response_text[:200]}")
-            
-            print(f"🔍 Parsed JSON result: {result}")
-            
-            if result.get("result") == "success":
-                return result
-            else:
-                error_msg = result.get('error', result.get('errors', 'Unknown error'))
-                print(f"❌ Kraken API returned error: {error_msg}")
-                raise Exception(f"Kraken API error: {error_msg}")
+    }
     
-    async def get_accounts(self) -> Dict:
-        """Get account information"""
-        return await self._private_request("/derivatives/api/v3/accounts", method="GET")
-    
-    async def fetch_balance(self) -> Dict:
-        """
-        Get account balance in CCXT-compatible format
-        Fetches from Kraken Futures accounts endpoint and formats the response
-        """
-        try:
-            print("🔍 Calling Kraken API: /derivatives/api/v3/accounts")
-            accounts_data = await self._private_request("/derivatives/api/v3/accounts", method="GET")
-            
-            print(f"📦 Kraken API Response: {accounts_data}")
-            
-            # Kraken returns: {"result": "success", "accounts": {...}}
-            if accounts_data.get("result") == "success" and "accounts" in accounts_data:
-                accounts = accounts_data["accounts"]
-                
-                # Format as CCXT-style balance
-                balance = {
-                    'total': {},
-                    'free': {},
-                    'used': {}
-                }
-                
-                # Kraken Futures flex account shows balances
-                if "flex" in accounts:
-                    flex = accounts["flex"]
-                    
-                    # Get available currencies
-                    if "currencies" in flex:
-                        for currency, data in flex["currencies"].items():
-                            currency_upper = currency.upper()
-                            
-                            # Total balance (including positions)
-                            if "quantity" in data:
-                                balance['total'][currency_upper] = float(data["quantity"])
-                            
-                            # Available balance (not in use)
-                            if "available" in data:
-                                balance['free'][currency_upper] = float(data["available"])
-                
-                # Also check if there's a balance key directly
-                if "balanceValue" in accounts.get("flex", {}):
-                    balance_value = float(accounts["flex"]["balanceValue"])
-                    balance['total']['USD'] = balance_value
-                    balance['free']['USD'] = balance_value
-                
-                return balance
-            
-            return {'total': {}, 'free': {}, 'used': {}}
-            
-        except Exception as e:
-            print(f"❌ Error fetching balance from Kraken: {e}")
-            print(f"🔍 Exception type: {type(e).__name__}")
-            import traceback
-            print(f"🔍 Traceback: {traceback.format_exc()}")
-            return {'total': {}, 'free': {}, 'used': {}}
-    
-    async def send_bracket_order(
-        self,
-        symbol: str,
-        side: str,
-        quantity: float,
-        entry_price: Optional[float],
-        stop_loss: float,
-        take_profit: float
-    ) -> Dict:
-        """
-        Send bracket order (entry + TP + SL)
-        
-        Args:
-            symbol: Trading pair (e.g., "pf_adausd")
-            side: "buy" or "sell"
-            quantity: Position size
-            entry_price: Entry price (None for market order)
-            stop_loss: Stop loss price
-            take_profit: Take profit price
-        """
-        # Prepare order batch - use correct Kraken field names
-        batch_order_list = [
-            {
-                "order": "send",
-                "orderType": "lmt" if entry_price else "mkt",
-                "symbol": symbol,
-                "side": side,
-                "size": quantity,
-                "limitPrice": entry_price,
-                "cliOrdId": f"nike_entry_{int(time.time())}"
-            },
-            {
-                "order": "send",
-                "orderType": "stp",
-                "symbol": symbol,
-                "side": "sell" if side == "buy" else "buy",
-                "size": quantity,
-                "stopPrice": stop_loss,
-                "triggerSignal": "mark",
-                "cliOrdId": f"nike_sl_{int(time.time())}"
-            },
-            {
-                "order": "send",
-                "orderType": "take_profit",
-                "symbol": symbol,
-                "side": "sell" if side == "buy" else "buy",
-                "size": quantity,
-                "limitPrice": take_profit,
-                "triggerSignal": "mark",
-                "cliOrdId": f"nike_tp_{int(time.time())}"
+    if USE_TESTNET:
+        exchange_config['urls'] = {
+            'api': {
+                'public': 'https://demo-futures.kraken.com/derivatives',
+                'private': 'https://demo-futures.kraken.com/derivatives',
             }
-        ]
-        
-        import json
-        return await self._private_request(
-            "/derivatives/api/v3/batchorder",
-            {"batchorder": json.dumps(batch_order_list)}
-        )
+        }
+        logger.info("🧪 Kraken DEMO mode enabled - using testnet")
+    else:
+        logger.info("🔴 Kraken LIVE mode enabled - REAL MONEY!")
     
-    async def get_open_positions(self) -> Dict:
-        """Get all open positions"""
-        return await self._private_request("/derivatives/api/v3/openpositions", method="GET")
+    exchange = ccxt.krakenfutures(exchange_config)
     
-    async def cancel_all_orders(self, symbol: str = None) -> Dict:
-        """Cancel all orders (optionally for specific symbol)"""
-        data = {}
-        if symbol:
-            data["symbol"] = symbol
-        return await self._private_request("/derivatives/api/v3/cancelallorders", data)
+    # Test connection
+    try:
+        exchange.load_markets()
+        logger.info(f"✅ Connected to Kraken Futures")
+    except Exception as e:
+        logger.error(f"❌ Failed to connect to Kraken: {e}")
+        raise
+    
+    return exchange
 
 
 # ==================== FOLLOWER AGENT ====================
 
 class NikeRocketFollower:
-    """Nike Rocket follower agent"""
+    """Nike Rocket follower agent using CCXT (same as master algo)"""
     
     def __init__(self):
-        self.kraken = KrakenFuturesAPI(KRAKEN_API_KEY, KRAKEN_API_SECRET, USE_TESTNET)
+        self.exchange = initialize_kraken_exchange()
         self.session = None
         self.current_position = None
         self.entry_signal = None
@@ -326,7 +137,7 @@ class NikeRocketFollower:
         print("=" * 60)
         print(f"API URL: {FOLLOWER_API_URL}")
         print(f"Mode: {'TESTNET (Demo)' if USE_TESTNET else 'LIVE (Real Money)'}")
-        print(f"Kraken API: {KRAKEN_API_URL}")
+        print(f"Exchange: Kraken Futures (via CCXT)")
         print("💰 Account balance will be fetched when signal arrives")
         print("=" * 60)
     
@@ -341,56 +152,43 @@ class NikeRocketFollower:
                     if response.status == 200:
                         return await response.json()
                     else:
-                        error_text = await response.text()
-                        print(f"❌ Access verification failed: {error_text}")
-                        return {"access_granted": False, "reason": "API error"}
+                        logger.error(f"❌ Access verification failed: {response.status}")
+                        return {"access_granted": False}
             except Exception as e:
-                print(f"❌ Error verifying access: {e}")
-                return {"access_granted": False, "reason": str(e)}
+                logger.error(f"❌ Error verifying access: {e}")
+                return {"access_granted": False}
     
     async def poll_for_signal(self) -> Optional[Dict]:
         """Poll Nike Rocket API for new signals"""
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(
-                    f"{FOLLOWER_API_URL}/api/latest-signal",
+                    f"{FOLLOWER_API_URL}/api/signals/latest",
                     headers={"X-API-Key": USER_API_KEY}
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        
-                        # Check access
-                        if not data.get("access_granted"):
-                            print(f"⚠️ Access suspended: {data.get('reason')}")
-                            if data.get("amount_due"):
-                                print(f"💰 Payment required: ${data['amount_due']:.2f}")
-                            return None
-                        
-                        # Return signal if present
-                        return data.get("signal")
-                    else:
-                        print(f"❌ Error fetching signal: HTTP {response.status}")
-                        return None
+                        if data.get('has_new_signal'):
+                            return data['signal']
+                    return None
             except Exception as e:
-                print(f"❌ Error polling API: {e}")
+                logger.error(f"❌ Error polling API: {e}")
                 return None
     
-    async def get_current_equity(self) -> float:
+    def get_current_equity(self) -> float:
         """
-        Get current futures account equity from Kraken
-        Uses EXACT same method as master algorithm
-        Checks multiple currencies (USD, USDT, USDC) for Kraken multi-collateral
+        Get current futures account equity
+        EXACT SAME METHOD AS MASTER ALGORITHM
         """
         try:
-            balance = await self.kraken.fetch_balance()
+            balance = self.exchange.fetch_balance()
             
             # Try multiple currency options (Kraken multi-collateral)
             for currency in ['USD', 'USDT', 'USDC']:
-                # Check total balance
                 if 'total' in balance and currency in balance['total']:
                     equity = float(balance['total'][currency])
                     if equity > 0:
-                        print(f"💰 Current equity: ${equity:,.2f} {currency}")
+                        logger.info(f"💰 Current equity: ${equity:,.2f} {currency}")
                         return equity
             
             # Try free balance as fallback
@@ -398,19 +196,30 @@ class NikeRocketFollower:
                 if 'free' in balance and currency in balance['free']:
                     equity = float(balance['free'][currency])
                     if equity > 0:
-                        print(f"💰 Current available: ${equity:,.2f} {currency}")
+                        logger.info(f"💰 Current available: ${equity:,.2f} {currency}")
                         return equity
             
-            print("⚠️ No balance found in USD, USDT, or USDC")
-            print("💡 Make sure you have funds in your Kraken Futures wallet")
+            logger.warning("⚠️ No balance found in USD, USDT, or USDC")
             return 0.0
                 
         except Exception as e:
-            print(f"❌ Error fetching balance: {e}")
+            logger.error(f"❌ Error fetching balance: {e}")
             return 0.0
     
+    def convert_symbol(self, signal_symbol: str) -> str:
+        """
+        Convert signal symbol format to Kraken format
+        
+        Signal format: BTC/USDT, ETH/USDT, etc.
+        Kraken format: BTC/USD:USD, ETH/USD:USD (linear perpetuals)
+        """
+        # Remove /USDT and add /USD:USD
+        base = signal_symbol.split('/')[0]
+        kraken_symbol = f"{base}/USD:USD"
+        return kraken_symbol
+    
     async def execute_signal(self, signal: Dict):
-        """Execute trading signal on Kraken"""
+        """Execute trading signal on Kraken using CCXT"""
         try:
             print("\n" + "=" * 60)
             print("📡 NEW SIGNAL RECEIVED")
@@ -425,264 +234,139 @@ class NikeRocketFollower:
             
             # GET REAL-TIME ACCOUNT BALANCE (same as master algo!)
             print("\n💰 Fetching account balance...")
-            current_equity = await self.get_current_equity()
+            current_equity = self.get_current_equity()
             
             if current_equity <= 0:
                 print("❌ No funds detected in account!")
-                print("💡 Please deposit funds to your Kraken Futures wallet")
                 return
             
-            # CHECK IF WE ALREADY HAVE A POSITION FOR THIS SYMBOL
-            print("\n🔍 Checking for existing positions...")
-            positions = await self.kraken.get_open_positions()
-            
-            # Convert symbol to Kraken format for comparison
+            # Convert symbol to Kraken format
             kraken_symbol = self.convert_symbol(signal['symbol'])
+            print(f"🔄 Converted symbol: {signal['symbol']} → {kraken_symbol}")
             
-            # Check if position already exists
-            for pos in positions.get("openPositions", []):
-                if pos.get("symbol") == kraken_symbol:
-                    print(f"⚠️ Already have open position for {signal['symbol']}")
-                    print(f"⏳ Waiting for TP/SL to close before taking new signals")
-                    print(f"   Current position: {pos.get('side')} {pos.get('size')} @ ${pos.get('fillPrice')}")
-                    print("=" * 60)
-                    return  # Skip this signal
+            # CHECK IF WE ALREADY HAVE A POSITION
+            print("\n🔍 Checking for existing positions...")
+            positions = self.exchange.fetch_positions([kraken_symbol])
+            
+            has_position = False
+            for pos in positions:
+                if pos['symbol'] == kraken_symbol and float(pos.get('contracts', 0)) > 0:
+                    has_position = True
+                    print(f"⚠️ Existing position found: {pos['contracts']} contracts")
+                    break
+            
+            if has_position:
+                print("⚠️ Already have a position, skipping signal")
+                return
             
             print("✅ No existing position found, proceeding with execution")
             
-            # Store signal and equity for P&L reporting later
-            self.entry_signal = signal
-            self.entry_equity = current_equity
+            # CALCULATE POSITION SIZE
+            risk_percentage = 0.02  # 2% risk per trade
+            entry_price = signal['entry_price']
+            stop_loss = signal['stop_loss']
+            leverage = signal['leverage']
             
-            # Convert symbol (ADA/USDT → pf_adausd)
-            kraken_symbol = self.convert_symbol(signal['symbol'])
+            # Calculate risk per unit
+            if signal['action'].upper() == 'BUY':
+                risk_per_unit = abs(entry_price - stop_loss)
+            else:
+                risk_per_unit = abs(stop_loss - entry_price)
             
-            # Calculate position size using REAL account equity
-            risk_amount = current_equity * 0.02  # 2% risk per trade
-            risk_per_unit = abs(signal['entry_price'] - signal['stop_loss'])
-            position_size = risk_amount / risk_per_unit
+            # Calculate position size
+            risk_amount = current_equity * risk_percentage
+            base_position_size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0
+            leveraged_position_size = base_position_size * leverage
             
-            # Apply leverage
-            position_size_with_leverage = position_size * signal['leverage']
+            # Round to exchange precision
+            quantity = float(self.exchange.amount_to_precision(kraken_symbol, leveraged_position_size))
             
             print(f"\n🎯 POSITION SIZING:")
             print(f"Account Equity: ${current_equity:,.2f}")
-            print(f"Risk Amount (2%): ${risk_amount:.2f}")
+            print(f"Risk Amount (2%): ${risk_amount:,.2f}")
             print(f"Risk Per Unit: ${risk_per_unit:.4f}")
-            print(f"Base Position: {position_size:.2f}")
-            print(f"With Leverage: {position_size_with_leverage:.2f}")
+            print(f"Base Position: {base_position_size:.2f}")
+            print(f"With Leverage: {quantity:.2f}")
             
-            # Determine side
-            side = "buy" if signal['action'] == "BUY" else "sell"
+            # PLACE ORDERS SEQUENTIALLY (SAME AS MASTER ALGO)
+            print(f"\n🚀 EXECUTING 3-ORDER BRACKET...")
             
-            # Send bracket order
-            print(f"\n🚀 EXECUTING KRAKEN BRACKET ORDER...")
-            result = await self.kraken.send_bracket_order(
-                symbol=kraken_symbol,
-                side=side,
-                quantity=position_size_with_leverage,
-                entry_price=signal['entry_price'],
-                stop_loss=signal['stop_loss'],
-                take_profit=signal['take_profit']
+            # 1. Place entry order (market)
+            print("📝 Placing entry order...")
+            side = signal['action'].lower()  # 'buy' or 'sell'
+            entry_order = self.exchange.create_market_order(kraken_symbol, side, quantity)
+            print(f"✅ Entry order placed: {entry_order['id']}")
+            
+            # 2. Wait a moment for fill
+            await asyncio.sleep(2)
+            
+            # 3. Place take-profit order
+            print("📝 Placing take-profit order...")
+            exit_side = 'sell' if side == 'buy' else 'buy'
+            tp_price = float(self.exchange.price_to_precision(kraken_symbol, signal['take_profit']))
+            tp_order = self.exchange.create_limit_order(
+                kraken_symbol, exit_side, quantity, tp_price,
+                params={'reduceOnly': True}
             )
+            print(f"✅ Take-profit order placed: {tp_order['id']}")
             
-            print("✅ Order executed successfully!")
-            print(f"Result: {result}")
+            # 4. Place stop-loss order
+            print("📝 Placing stop-loss order...")
+            sl_price = float(self.exchange.price_to_precision(kraken_symbol, signal['stop_loss']))
+            sl_order = self.exchange.create_order(
+                kraken_symbol, 'stop', exit_side, quantity,
+                params={'stopPrice': sl_price, 'reduceOnly': True}
+            )
+            print(f"✅ Stop-loss order placed: {sl_order['id']}")
             
-            # Store position info
-            self.current_position = {
-                "signal_id": signal['signal_id'],
-                "symbol": signal['symbol'],
-                "side": side,
-                "entry_price": signal['entry_price'],
-                "stop_loss": signal['stop_loss'],
-                "take_profit": signal['take_profit'],
-                "position_size": position_size_with_leverage,
-                "leverage": signal['leverage'],
-                "opened_at": datetime.utcnow().isoformat(),
-                "kraken_result": result
-            }
+            print(f"\n🎉 TRADE EXECUTED SUCCESSFULLY!")
+            print(f"Position opened with full TP/SL protection")
+            print("=" * 60)
             
         except Exception as e:
-            print(f"❌ Error executing signal: {e}")
+            logger.error(f"❌ Error executing signal: {e}")
             import traceback
             traceback.print_exc()
-    
-    async def monitor_position(self):
-        """Monitor open position and report P&L when closed"""
-        if not self.current_position:
-            return
-        
-        try:
-            # Check if position is still open
-            positions = await self.kraken.get_open_positions()
-            
-            # Find our position
-            our_symbol = self.convert_symbol(self.current_position['symbol'])
-            position_still_open = False
-            
-            for pos in positions.get("openPositions", []):
-                if pos.get("symbol") == our_symbol:
-                    position_still_open = True
-                    break
-            
-            # If position closed, calculate and report P&L
-            if not position_still_open:
-                print("\n" + "=" * 60)
-                print("💰 POSITION CLOSED - CALCULATING P&L")
-                print("=" * 60)
-                
-                await self.report_pnl()
-                
-                # Clear position
-                self.current_position = None
-                self.entry_signal = None
-        
-        except Exception as e:
-            print(f"❌ Error monitoring position: {e}")
-    
-    async def report_pnl(self):
-        """Calculate and report P&L to Nike Rocket API"""
-        if not self.current_position:
-            return
-        
-        try:
-            # Get account info to find the exit price
-            accounts = await self.kraken.get_accounts()
-            
-            # For simplicity, we'll estimate P&L
-            # In production, you'd get the exact fill price from order history
-            entry = self.current_position['entry_price']
-            
-            # Check if position hit TP or SL
-            # This is a simplified version - in production, check order fills
-            current_price = entry  # Placeholder
-            
-            # Estimate exit (TP or SL)
-            if self.current_position['side'] == "buy":
-                # Assume TP if price went up, SL if down
-                if abs(entry - self.current_position['take_profit']) < abs(entry - self.current_position['stop_loss']):
-                    exit_price = self.current_position['take_profit']
-                else:
-                    exit_price = self.current_position['stop_loss']
-            else:
-                if abs(entry - self.current_position['take_profit']) < abs(entry - self.current_position['stop_loss']):
-                    exit_price = self.current_position['take_profit']
-                else:
-                    exit_price = self.current_position['stop_loss']
-            
-            # Calculate P&L
-            if self.current_position['side'] == "buy":
-                pnl = (exit_price - entry) * self.current_position['position_size']
-            else:
-                pnl = (entry - exit_price) * self.current_position['position_size']
-            
-            profit_percent = ((exit_price - entry) / entry) * 100
-            
-            print(f"Entry: ${entry}")
-            print(f"Exit: ${exit_price}")
-            print(f"P&L: ${pnl:.2f}")
-            print(f"Return: {profit_percent:.2f}%")
-            
-            # Report to API
-            trade_report = {
-                "trade_id": f"nike_{int(time.time())}",
-                "signal_id": self.current_position['signal_id'],
-                "opened_at": self.current_position['opened_at'],
-                "closed_at": datetime.utcnow().isoformat(),
-                "symbol": self.current_position['symbol'],
-                "side": self.current_position['side'].upper(),
-                "entry_price": entry,
-                "exit_price": exit_price,
-                "position_size": self.current_position['position_size'],
-                "leverage": self.current_position['leverage'],
-                "profit_usd": pnl,
-                "profit_percent": profit_percent
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{FOLLOWER_API_URL}/api/report-pnl",
-                    json=trade_report,
-                    headers={"X-API-Key": USER_API_KEY}
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        print(f"\n✅ P&L reported to Nike Rocket API")
-                        print(f"Monthly profit: ${result.get('monthly_profit', 0):.2f}")
-                        print(f"Monthly fee due: ${result.get('monthly_fee_due', 0):.2f}")
-                    else:
-                        print(f"❌ Failed to report P&L: HTTP {response.status}")
-        
-        except Exception as e:
-            print(f"❌ Error reporting P&L: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    def convert_symbol(self, symbol: str) -> str:
-        """Convert symbol format (ADA/USDT → pf_adausd)"""
-        # Remove slash and convert to lowercase
-        base = symbol.split("/")[0].lower()
-        return f"pf_{base}usd"
-    
-    async def run(self):
-        """Main agent loop"""
-        print("\n🎯 Starting Nike Rocket Follower Agent...")
-        
-        # Verify access
-        access = await self.verify_access()
-        if not access.get("access_granted"):
-            print(f"❌ Access denied: {access.get('reason')}")
-            print("Please contact support or pay any outstanding fees.")
-            return
-        
-        print("✅ Access verified")
-        print("\n📡 Polling for signals every 10 seconds...")
-        print("Press Ctrl+C to stop\n")
-        
-        while True:
-            try:
-                # Poll for new signal
-                signal = await self.poll_for_signal()
-                
-                if signal:
-                    # Execute signal
-                    await self.execute_signal(signal)
-                
-                # Monitor existing position
-                await self.monitor_position()
-                
-                # Wait before next poll
-                await asyncio.sleep(POLL_INTERVAL)
-            
-            except KeyboardInterrupt:
-                print("\n\n⚠️ Stopping agent...")
-                break
-            except Exception as e:
-                print(f"❌ Error in main loop: {e}")
-                await asyncio.sleep(POLL_INTERVAL)
-        
-        print("👋 Agent stopped")
 
 
-# ==================== MAIN ====================
+# ==================== MAIN LOOP ====================
 
 async def main():
-    """Entry point"""
-    # Validate environment variables
-    if not USER_API_KEY:
-        print("❌ Error: USER_API_KEY not set")
-        print("Please set your Nike Rocket API key in environment variables")
-        sys.exit(1)
+    """Main polling loop"""
+    print("🎯 Starting Nike Rocket Follower Agent...")
     
-    if not KRAKEN_API_KEY or not KRAKEN_API_SECRET:
-        print("❌ Error: Kraken API credentials not set")
-        print("Please set KRAKEN_API_KEY and KRAKEN_API_SECRET")
-        sys.exit(1)
+    follower = NikeRocketFollower()
     
-    # Create and run agent
-    agent = NikeRocketFollower()
-    await agent.run()
+    # Verify access
+    access_result = await follower.verify_access()
+    if not access_result.get('access_granted'):
+        print("❌ Access denied! Check your API key")
+        return
+    
+    print("✅ Access verified")
+    print(f"📡 Polling for signals every {POLL_INTERVAL} seconds...")
+    print("Press Ctrl+C to stop\n")
+    
+    while True:
+        try:
+            # Poll for new signal
+            signal = await follower.poll_for_signal()
+            
+            if signal:
+                # Execute the signal
+                await follower.execute_signal(signal)
+            else:
+                print(f"⏳ No new signals (polling...)", end='\r')
+            
+            # Wait before next poll
+            await asyncio.sleep(POLL_INTERVAL)
+            
+        except KeyboardInterrupt:
+            print("\n⛔ Stopping follower agent...")
+            break
+        except Exception as e:
+            logger.error(f"❌ Error in main loop: {e}")
+            await asyncio.sleep(POLL_INTERVAL)
 
 
 if __name__ == "__main__":
